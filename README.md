@@ -1,6 +1,6 @@
 # Optimal stopping
 
-I want to see if a neural net can figure out the solution to the [optimal stopping](https://en.wikipedia.org/wiki/Optimal_stopping) problem. I will do this in a supervised fashion, optimizing the expected probability of success. Although the training is supervised, the network will be told the winning strategy; rather, the it will only be told what the best choice *would* have been, not how it can win on average.
+This experiment sees if a neural net can solve the [optimal stopping](https://en.wikipedia.org/wiki/Optimal_stopping) problem. The network is trained in a supervised fashion, optimizing the expected probability of success. Although the training is supervised, the network is never told the winning strategy; rather, it is only told what the best choice *would* have been, not how it can win on average.
 
 In the future, I hope to augment this to use reinforcement learning. It seems like a fairly simple application of RL, but I wanted to start off with supervised learning.
 
