@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 
 	"github.com/unixpickle/autofunc"
+	"github.com/unixpickle/num-analysis/linalg"
 	"github.com/unixpickle/serializer"
 	"github.com/unixpickle/weakai/neuralnet"
 )
@@ -66,22 +67,14 @@ func (s *StopActivation) Serialize() ([]byte, error) {
 }
 
 func (s *StopActivation) applySingle(in autofunc.Result) autofunc.Result {
-	ins := autofunc.Split(s.TimeCount, in)
-	one := &autofunc.Variable{Vector: []float64{1}}
-	zero := &autofunc.Variable{Vector: []float64{0}}
-	res := autofunc.Fold(one, ins, func(s, energy autofunc.Result) autofunc.Result {
-		probRemaining := autofunc.Slice(s, 0, 1)
-		lastProbs := autofunc.Slice(s, 1, len(s.Output()))
-
-		sm := neuralnet.SoftmaxLayer{}
-		probs := sm.Apply(autofunc.Concat(zero, energy))
-		probContinue := autofunc.Slice(probs, 0, 1)
-		probStop := autofunc.Slice(probs, 1, 2)
-		stay := autofunc.Mul(probRemaining, probContinue)
-		stop := autofunc.Mul(probRemaining, probStop)
-		return autofunc.Concat(stay, lastProbs, stop)
-	})
-	return autofunc.Slice(res, 1, len(res.Output()))
+	res := &activationResult{CondProbs: neuralnet.Sigmoid{}.Apply(in)}
+	cumulative := 1.0
+	for _, x := range res.CondProbs.Output() {
+		res.Cumulative = append(res.Cumulative, cumulative)
+		res.OutVec = append(res.OutVec, cumulative*x)
+		cumulative *= (1 - x)
+	}
+	return res
 }
 
 func (s *StopActivation) applySingleR(in autofunc.RResult) autofunc.RResult {
@@ -102,4 +95,32 @@ func (s *StopActivation) applySingleR(in autofunc.RResult) autofunc.RResult {
 		return autofunc.ConcatR(stay, lastProbs, stop)
 	})
 	return autofunc.SliceR(res, 1, len(res.Output()))
+}
+
+type activationResult struct {
+	CondProbs  autofunc.Result
+	Cumulative linalg.Vector
+	OutVec     linalg.Vector
+}
+
+func (a *activationResult) Output() linalg.Vector {
+	return a.OutVec
+}
+
+func (a *activationResult) Constant(g autofunc.Gradient) bool {
+	return a.CondProbs.Constant(g)
+}
+
+func (a *activationResult) PropagateGradient(u linalg.Vector, g autofunc.Gradient) {
+	if a.Constant(g) {
+		return
+	}
+	condGrad := make(linalg.Vector, len(u))
+	var nextCumGrad float64
+	for i := len(u) - 1; i >= 0; i-- {
+		condProb := a.CondProbs.Output()[i]
+		condGrad[i] = a.Cumulative[i] * (u[i] - nextCumGrad)
+		nextCumGrad = condProb*u[i] + nextCumGrad*(1-condProb)
+	}
+	a.CondProbs.PropagateGradient(condGrad, g)
 }
