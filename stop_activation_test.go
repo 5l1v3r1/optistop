@@ -44,3 +44,17 @@ func TestStopActivation(t *testing.T) {
 	}
 	checker.FullCheck(t)
 }
+
+func BenchmarkStopActivation(b *testing.B) {
+	in := &autofunc.Variable{Vector: make(linalg.Vector, 50)}
+	upstream := make(linalg.Vector, len(in.Vector))
+	for i := range in.Vector {
+		upstream[i] = rand.NormFloat64()
+		in.Vector[i] = rand.NormFloat64()
+	}
+	sa := &StopActivation{TimeCount: len(in.Vector)}
+	grad := autofunc.NewGradient([]*autofunc.Variable{in})
+	for i := 0; i < b.N; i++ {
+		sa.Apply(in).PropagateGradient(upstream.Copy(), grad)
+	}
+}
