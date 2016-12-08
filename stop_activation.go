@@ -67,17 +67,18 @@ func (s *StopActivation) Serialize() ([]byte, error) {
 
 func (s *StopActivation) applySingle(in autofunc.Result) autofunc.Result {
 	ins := autofunc.Split(s.TimeCount, in)
+	one := &autofunc.Variable{Vector: []float64{1}}
 	zero := &autofunc.Variable{Vector: []float64{0}}
-	res := autofunc.Fold(zero, ins, func(s, energy autofunc.Result) autofunc.Result {
+	res := autofunc.Fold(one, ins, func(s, energy autofunc.Result) autofunc.Result {
 		probRemaining := autofunc.Slice(s, 0, 1)
 		lastProbs := autofunc.Slice(s, 1, len(s.Output()))
 
-		sm := neuralnet.LogSoftmaxLayer{}
+		sm := neuralnet.SoftmaxLayer{}
 		probs := sm.Apply(autofunc.Concat(zero, energy))
 		probContinue := autofunc.Slice(probs, 0, 1)
 		probStop := autofunc.Slice(probs, 1, 2)
-		stay := autofunc.Add(probRemaining, probContinue)
-		stop := autofunc.Add(probRemaining, probStop)
+		stay := autofunc.Mul(probRemaining, probContinue)
+		stop := autofunc.Mul(probRemaining, probStop)
 		return autofunc.Concat(stay, lastProbs, stop)
 	})
 	return autofunc.Slice(res, 1, len(res.Output()))
@@ -85,21 +86,19 @@ func (s *StopActivation) applySingle(in autofunc.Result) autofunc.Result {
 
 func (s *StopActivation) applySingleR(in autofunc.RResult) autofunc.RResult {
 	ins := autofunc.SplitR(s.TimeCount, in)
-	zero := &autofunc.RVariable{
-		Variable:   &autofunc.Variable{Vector: []float64{0}},
-		ROutputVec: []float64{0},
-	}
 	rv := autofunc.RVector{}
-	res := autofunc.FoldR(zero, ins, func(s, energy autofunc.RResult) autofunc.RResult {
+	zero := autofunc.NewRVariable(&autofunc.Variable{Vector: []float64{0}}, rv)
+	one := autofunc.NewRVariable(&autofunc.Variable{Vector: []float64{1}}, rv)
+	res := autofunc.FoldR(one, ins, func(s, energy autofunc.RResult) autofunc.RResult {
 		probRemaining := autofunc.SliceR(s, 0, 1)
 		lastProbs := autofunc.SliceR(s, 1, len(s.Output()))
 
-		sm := neuralnet.LogSoftmaxLayer{}
+		sm := neuralnet.SoftmaxLayer{}
 		probs := sm.ApplyR(rv, autofunc.ConcatR(zero, energy))
 		probContinue := autofunc.SliceR(probs, 0, 1)
 		probStop := autofunc.SliceR(probs, 1, 2)
-		stay := autofunc.AddR(probRemaining, probContinue)
-		stop := autofunc.AddR(probRemaining, probStop)
+		stay := autofunc.MulR(probRemaining, probContinue)
+		stop := autofunc.MulR(probRemaining, probStop)
 		return autofunc.ConcatR(stay, lastProbs, stop)
 	})
 	return autofunc.SliceR(res, 1, len(res.Output()))

@@ -1,7 +1,6 @@
 package optistop
 
 import (
-	"math"
 	"math/rand"
 	"testing"
 
@@ -17,7 +16,7 @@ func TestStopActivationOutput(t *testing.T) {
 	expected := []float64{}
 	remainingProb := 1.0
 	for _, p := range conditional.Output() {
-		expected = append(expected, math.Log(remainingProb*p))
+		expected = append(expected, remainingProb*p)
 		remainingProb *= (1 - p)
 	}
 

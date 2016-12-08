@@ -38,6 +38,5 @@ func (g *Gradienter) Cost(s sgd.SampleSet) autofunc.Result {
 	res := f.ApplySeqs(seqfunc.ConstResult(inSeqs))
 	joined := seqfunc.ConcatAll(res)
 	activated := g.Activation.Apply(joined)
-	activated = autofunc.Exp{}.Apply(activated)
 	return autofunc.Scale(neuralnet.DotCost{}.Cost(out, activated), 1/float64(s.Len()))
 }
