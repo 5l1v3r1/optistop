@@ -3,117 +3,183 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"math"
 	"math/rand"
 	"os"
+	"os/signal"
 	"time"
 
+	"github.com/unixpickle/autofunc"
+	"github.com/unixpickle/autofunc/seqfunc"
+	"github.com/unixpickle/num-analysis/linalg"
 	"github.com/unixpickle/optistop"
-	"github.com/unixpickle/serializer"
 	"github.com/unixpickle/sgd"
 	"github.com/unixpickle/weakai/neuralnet"
 	"github.com/unixpickle/weakai/rnn"
 )
 
-const StateSize = 40
+const (
+	Stop     = 0
+	Continue = 1
+)
 
 func main() {
 	rand.Seed(time.Now().UnixNano())
 
 	var netPath string
 	var sampleLen int
-	var batchSize int
+	var roundSize int
+	var roundSteps int
 	var stepSize float64
-	var logInterval int
+	var exploreCoeff float64
+	var logSteps bool
 	flag.StringVar(&netPath, "file", "out_net", "network file")
 	flag.IntVar(&sampleLen, "len", 50, "number of timesteps")
-	flag.IntVar(&logInterval, "log", 4, "log interval")
-	flag.IntVar(&batchSize, "batch", 4, "batch size")
+	flag.IntVar(&roundSize, "round", 100, "episodes per round")
+	flag.IntVar(&roundSteps, "steps", 10, "SGD steps per round")
 	flag.Float64Var(&stepSize, "step", 0.001, "step size")
+	flag.Float64Var(&exploreCoeff, "explore", -1, "chance of random decision")
+	flag.BoolVar(&logSteps, "logsteps", false, "log SGD steps")
 
 	flag.Parse()
 
-	block, err := readNetwork(netPath, sampleLen)
+	if exploreCoeff == -1 {
+		// Improve the likelihood of stopping anywhere in the
+		// sequences (rather than stopping very early).
+		// The math is setup so that we have a 1/n probability
+		// of finishing the sequence of length n, assuming that
+		// the policy will never decide to stop.
+		exploreCoeff = 2 * (1 - math.Pow(1/float64(sampleLen), 1/(float64(sampleLen)-1)))
+	}
+	log.Println("Explore coefficient:", exploreCoeff)
+
+	model, err := readModel(netPath)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Read network:", err)
+		fmt.Fprintln(os.Stderr, "Read network file:", err)
 		os.Exit(1)
 	}
 
-	model := &Gradienter{
-		Block:      block,
-		Activation: &optistop.StopActivation{TimeCount: sampleLen},
-	}
-	g := &sgd.Adam{
-		Gradienter: model,
-	}
+	var g sgd.Adam
 
-	samples := createSampleSet(sampleLen)
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
 
-	var iter int
-	var last sgd.SampleSet
-	sgd.SGDMini(g, samples, stepSize, batchSize, func(batch sgd.SampleSet) bool {
-		if iter%logInterval == 0 {
-			var lastCost float64
-			if last != nil {
-				lastCost = model.Cost(last).Output()[0]
-			}
-			last = batch.Copy()
-			thisCost := model.Cost(batch).Output()[0]
-			log.Printf("iter %d: cost=%f last=%f", iter, thisCost, lastCost)
+	var roundIdx int
+TrainLoop:
+	for {
+		var totalReward float64
+		var comps [][]bool
+		var targets [][]linalg.Vector
+		for i := 0; i < roundSize; i++ {
+			comp, target, rew := runEpisode(model, sampleLen, exploreCoeff)
+			comps = append(comps, comp)
+			targets = append(targets, target)
+			totalReward += rew
 		}
-		iter++
-		return true
-	})
 
-	data, err := serializer.SerializeAny(block)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Serialize block error:", err)
-		os.Exit(1)
+		log.Printf("round=%d reward=%f", roundIdx, totalReward/float64(roundSize))
+		roundIdx++
+
+		grad := autofunc.NewGradient(model.Block.(sgd.Learner).Parameters())
+		for i := 0; i < roundSteps; i++ {
+			select {
+			case <-c:
+				break TrainLoop
+			default:
+			}
+			if i != 0 {
+				grad.Zero()
+			}
+			cost := episodeCost(model, comps, targets)
+			cost.PropagateGradient([]float64{1}, grad)
+			g.Transform(grad).AddToVars(-stepSize)
+			if logSteps {
+				log.Printf("step=%d cost=%f", i, cost.Output()[0])
+			}
+		}
 	}
-	if err := ioutil.WriteFile(netPath, data, 0755); err != nil {
+
+	if err := model.Save(netPath); err != nil {
 		fmt.Fprintln(os.Stderr, "Write network file:", err)
 		os.Exit(1)
 	}
 }
 
-func readNetwork(path string, numSteps int) (rnn.Block, error) {
-	if data, err := ioutil.ReadFile(path); err == nil {
-		var res rnn.Block
-		if err := serializer.DeserializeAny(data, &res); err != nil {
-			return nil, err
-		}
-		return res, nil
+func readModel(path string) (*optistop.Model, error) {
+	model, err := optistop.LoadModel(path)
+	if err == nil {
+		return model, nil
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
-
-	outNet := neuralnet.Network{
-		&neuralnet.DenseLayer{
-			InputCount:  StateSize,
-			OutputCount: 1,
-		},
-	}
-	outNet.Randomize()
-
-	// Set the start bias so the probabilities don't decay
-	// too fast (aiming to have a 0.2 probability left over
-	// for the final timestep).
-	startBias := math.Log(1 - math.Pow(0.2, 1/float64(numSteps)))
-	outNet[0].(*neuralnet.DenseLayer).Biases.Var.Vector[0] = startBias
-
-	block := rnn.StackedBlock{
-		rnn.NewLSTM(1, StateSize),
-		rnn.NewNetworkBlock(outNet, 0),
-	}
-	return block, nil
+	model = optistop.NewModel()
+	params := model.Block.(sgd.Learner).Parameters()
+	biases := params[len(params)-1]
+	biases.Vector[Stop] = -10
+	return model, nil
 }
 
-func createSampleSet(timeCount int) sgd.SampleSet {
-	var res optistop.SampleSet
-	for i := 0; i < 100000; i++ {
-		res = append(res, optistop.Sample(rand.Perm(timeCount)))
+func runEpisode(m *optistop.Model, size int, explore float64) (comps []bool,
+	targets []linalg.Vector, reward float64) {
+	s := optistop.NewSample(size)
+
+	r := rnn.Runner{Block: m.Block}
+	var lastPrediction linalg.Vector
+	for j := 1; j <= size; j++ {
+		comparison := s.Comparisons()[j-1]
+		input := []float64{0}
+		if comparison {
+			input[0] = 1
+		}
+		prediction := r.StepTime(input)
+		maxValue, maxAction := prediction.Max()
+
+		if lastPrediction != nil {
+			target := append(linalg.Vector{}, lastPrediction...)
+			target[Continue] = maxValue
+			targets = append(targets, target)
+		}
+		lastPrediction = prediction
+
+		if rand.Float64() < explore {
+			maxAction = rand.Intn(2)
+		}
+		if maxAction == Stop {
+			if s[j-1] == 0 {
+				reward = 1.0
+			}
+			lastPrediction = nil
+			target := append(linalg.Vector{}, prediction...)
+			target[Stop] = reward
+			targets = append(targets, target)
+			break
+		}
 	}
-	return res
+	if lastPrediction != nil {
+		target := append(linalg.Vector{}, lastPrediction...)
+		target[Continue] = 0
+		targets = append(targets, target)
+	}
+	return s.Comparisons()[:len(targets)], targets, reward
+}
+
+func episodeCost(m *optistop.Model, comps [][]bool, targets [][]linalg.Vector) autofunc.Result {
+	var cost autofunc.Result
+	for i, seq := range comps {
+		target := targets[i]
+		allPred := m.AllActionValues(seq)
+		allTarget := seqfunc.ConstResult([][]linalg.Vector{target})
+		c := seqfunc.AddAll(seqfunc.MapN(func(in ...autofunc.Result) autofunc.Result {
+			pred := in[0]
+			targ := in[1]
+			return neuralnet.MeanSquaredCost{}.Cost(targ.Output(), pred)
+		}, allPred, allTarget))
+		if cost == nil {
+			cost = c
+		} else {
+			cost = autofunc.Add(cost, c)
+		}
+	}
+	return cost
 }
