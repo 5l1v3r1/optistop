@@ -1,8 +1,10 @@
 # Optimal stopping
 
-This experiment sees if a neural net can solve the [optimal stopping](https://en.wikipedia.org/wiki/Optimal_stopping) problem. The network is trained using [Q-learning](https://en.wikipedia.org/wiki/Q-learning). In the optimal stopping problem, the agent sees a list of candidates and is told if each candidate is superior to all the other candidates. The agent wants to select the best candidate, but must choose whether to accept or select a candidate on the spot (it cannot wait to see the remaining candidates).
+This experiment sees if a neural net can solve an [optimal stopping](https://en.wikipedia.org/wiki/Optimal_stopping) problem known as the [secretary problem](https://en.wikipedia.org/wiki/Secretary_problem). The network (a multi-layer LSTM) is trained using [Q-learning](https://en.wikipedia.org/wiki/Q-learning).
 
-Before I used Q-learning, I had a [version of optistop](https://github.com/unixpickle/optistop/tree/supervised) that used supervised learning. The supervised version was very fast (it took about 30 seconds to become optimal on 50-timestep scenarios).
+In the optimal stopping problem, the agent sees a stream of candidates and is told when a candidate is superior to all the previous candidates. For each candidate, the agent can either select that candidate or pass. The agent's goal is to select the best candidate, knowing that it cannot make multiple selections and cannot undo a decision to pass or select once the decision is made.
+
+Before I learned about Q-learning, I had a [version of optistop](https://github.com/unixpickle/optistop/tree/supervised) that used supervised learning. The supervised version was very fast (it took about 30 seconds to become optimal on 50-timestep scenarios).
 
 # Results
 
